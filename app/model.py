@@ -94,11 +94,14 @@ class PolicyService:
             return
 
         self._policies = loaded
-        self._version = (
-            f"{settings.mlflow_model_prefix}@{settings.mlflow_model_stage}"
-            if settings.mlflow_model_prefix
-            else f"{Path(settings.model_dir).name}:{settings.scenario}"
-        )
+
+        if settings.mlflow_model_prefix:
+            self._version = f"{settings.mlflow_model_prefix}@{settings.mlflow_model_stage}"
+        else:
+            parts = Path(settings.model_dir).parts
+            # models/grid2x2/dqn/medium -> grid2x2-dqn-medium
+            self._version = "-".join(parts[-3:]) if len(parts) >= 3 else settings.scenario
+
         self._load_error = None
         logger.info("all %d agents ready (version=%s)", len(loaded), self._version)
 
