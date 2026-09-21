@@ -1,0 +1,8 @@
+# Base: what every environment has in common.
+# Environment-specific differences live in overlays/, never in here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml

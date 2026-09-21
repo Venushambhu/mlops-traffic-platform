@@ -1,6 +1,0 @@
-# A namespace is a folder for Kubernetes objects. Everything for this service
-# lives in "tsc", so it can be inspected or deleted as one unit.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: tsc

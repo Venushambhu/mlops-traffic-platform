@@ -1,0 +1,15 @@
+# production overlay: the base, placed in its own namespace, with production-sized replicas.
+# The image is set by the pipeline at deploy time with `kustomize edit set image`,
+# so both environments receive the identical artifact.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: tsc-production
+resources:
+  - namespace.yaml
+  - ../../base
+replicas:
+  - name: tsc-policy
+    count: 2
+images:
+  - name: tsc-policy
+    newTag: latest-built-by-ci

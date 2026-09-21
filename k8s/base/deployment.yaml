@@ -4,7 +4,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tsc-policy
-  namespace: tsc
   labels:
     app: tsc-policy
 spec:
@@ -37,11 +36,11 @@ spec:
 
       containers:
         - name: policy
-          # A new tag for every code change. Reusing a tag means the cluster
-          # cannot tell old and new images apart.
-          image: tsc-policy:0.2.0
-          # kind has no registry to pull from; the image is loaded into the node
-          # with `kind load docker-image`. IfNotPresent uses that local copy.
+          # Placeholder. The pipeline replaces it with the exact image it built,
+          # tagged with the commit SHA (see .gitlab-ci.yml).
+          image: tsc-policy
+          # SHA tags are unique per commit, so IfNotPresent never serves a stale
+          # image under a reused tag.
           imagePullPolicy: IfNotPresent
 
           ports:

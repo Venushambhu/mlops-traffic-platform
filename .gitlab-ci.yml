@@ -1,0 +1,125 @@
+# GitLab CI/CD pipeline for the traffic signal policy service.
+#
+#   lint -> test -> build -> push -> deploy staging -> [manual gate] -> deploy production
+#
+# Build once, promote the same artifact: the image is built exactly once and
+# tagged with the commit SHA. Staging and production both deploy that exact tag.
+# Nothing is rebuilt between environments, so what passed staging is
+# byte-for-byte what reaches production.
+
+stages:
+  - lint
+  - test
+  - build
+  - push
+  - staging
+  - production
+
+variables:
+  # One immutable tag per commit. Never "latest": a tag that moves makes it
+  # impossible to say which code is running.
+  IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+# ---------------------------------------------------------------------------
+# Lint and test: run anywhere (GitLab's shared runners by default).
+# ---------------------------------------------------------------------------
+.python:
+  image: python:3.11.16-slim-bookworm
+  cache:
+    key:
+      files: [requirements.txt, requirements-dev.txt]
+    paths: [.cache/pip]
+  before_script:
+    # A fresh virtualenv per job. On a shell runner this keeps the pipeline from
+    # installing into the machine's global Python (the conda incident, again).
+    - python3.11 -m venv .ci-venv
+    - . .ci-venv/bin/activate
+
+lint:
+  extends: .python
+  stage: lint
+  script:
+    - pip install ruff==0.8.6
+    - ruff check app tests scripts
+
+test:
+  extends: .python
+  stage: test
+  script:
+    # CPU-only torch on Linux, same reason as the Dockerfile: the default wheel
+    # drags in ~2 GB of CUDA the tests never use.
+    - if [ "$(uname)" = "Linux" ]; then pip install --index-url https://download.pytorch.org/whl/cpu torch==2.13.0; fi
+    - pip install -r requirements-dev.txt
+    - python -m pytest -q
+
+# ---------------------------------------------------------------------------
+# Build, push, deploy: run on a runner on my Mac, next to the kind cluster.
+# GitLab's cloud runners cannot reach a cluster on a laptop.
+# ---------------------------------------------------------------------------
+.local:
+  tags: [mac-local]
+  rules:
+    # Only the default branch ships. Feature branches get lint and test only.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+build:
+  extends: .local
+  stage: build
+  script:
+    - docker build -t "$IMAGE" .
+
+# Push is separate from build so a gate can sit between them later (image
+# vulnerability scanning in phase 8): a failing scan should stop the push,
+# so a vulnerable image never reaches the registry at all.
+push:
+  extends: .local
+  stage: push
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker push "$IMAGE"
+
+.deploy:
+  extends: .local
+  script:
+    - cd "k8s/overlays/$OVERLAY"
+    # Point this environment at the exact image built above. This edits the
+    # job's checkout only; it is never committed.
+    - kustomize edit set image tsc-policy="$IMAGE"
+    - kubectl apply -k .
+    # Blocks until the new pods pass readiness, or fails the job after 180s.
+    # A stuck rollout fails the pipeline instead of passing silently.
+    - kubectl -n "$NAMESPACE" rollout status deployment/tsc-policy --timeout=180s
+    # Smoke test from inside a pod: the models loaded and the service is ready.
+    - >
+      kubectl -n "$NAMESPACE" exec deploy/tsc-policy --
+      python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/ready').read().decode())"
+      | tee ready.json
+    - grep -q '"ready":true' ready.json
+
+deploy-staging:
+  extends: .deploy
+  stage: staging
+  variables:
+    OVERLAY: staging
+    NAMESPACE: tsc-staging
+  environment:
+    name: staging
+
+deploy-production:
+  extends: .deploy
+  stage: production
+  variables:
+    OVERLAY: production
+    NAMESPACE: tsc-production
+  environment:
+    name: production
+  # Two deploys to production must never run at the same time.
+  resource_group: production
+  rules:
+    # The manual gate. The pipeline stops here, shown as "blocked", until a
+    # person approves. allow_failure: false is what makes it a real gate —
+    # without it, the pipeline would show as passed while production waits.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: false
