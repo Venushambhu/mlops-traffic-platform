@@ -46,17 +46,46 @@ class StableBaselinesPolicy:
 
         return cls(DQN.load(str(path), device="cpu"), version=f"file:{path.name}")
 
-    @classmethod
-    def from_registry(cls, name: str, stage: str, tracking_uri: str) -> "StableBaselinesPolicy":
-        import mlflow
-
-        mlflow.set_tracking_uri(tracking_uri)
-        model = mlflow.pyfunc.load_model(f"models:/{name}/{stage}")
-        return cls(model, version=f"{name}@{stage}")
-
     def predict(self, observation: np.ndarray) -> int:
         action, _state = self._model.predict(observation, deterministic=True)
         return int(np.asarray(action).item())
+
+
+class MLflowRegistryPolicy:
+    """A model resolved from the MLflow Model Registry by alias.
+
+    The service never names a model version. It asks for whichever version
+    currently carries the alias (e.g. "Production"), so promoting a new model
+    or rolling back is a registry operation — no config change, no redeploy.
+
+    Aliases, not stages: MLflow deprecated the Staging/Production *stages* in
+    2.9 in favour of *aliases*, which are named pointers to a version.
+    """
+
+    def __init__(self, model: Any, version: str) -> None:
+        self._model = model
+        self.version = version
+
+    @classmethod
+    def from_registry(cls, name: str, alias: str, tracking_uri: str) -> "MLflowRegistryPolicy":
+        import mlflow
+        from mlflow.tracking import MlflowClient
+
+        mlflow.set_tracking_uri(tracking_uri)
+        model = mlflow.pyfunc.load_model(f"models:/{name}@{alias}")
+
+        try:
+            mv = MlflowClient().get_model_version_by_alias(name, alias)
+            resolved = f"{name}@{alias}=v{mv.version}"
+        except Exception:  # noqa: BLE001 — version detail is useful, not essential
+            resolved = f"{name}@{alias}"
+
+        return cls(model, version=resolved)
+
+    def predict(self, observation: np.ndarray) -> int:
+        # pyfunc expects a batch; the service predicts one intersection at a time.
+        actions = self._model.predict(observation.reshape(1, -1))
+        return int(np.asarray(actions).ravel()[0])
 
 
 class PolicyService:
@@ -80,8 +109,8 @@ class PolicyService:
             for agent in settings.agents:
                 if settings.mlflow_model_prefix and settings.mlflow_tracking_uri:
                     name = f"{settings.mlflow_model_prefix}-{agent}"
-                    loaded[agent] = StableBaselinesPolicy.from_registry(
-                        name, settings.mlflow_model_stage, settings.mlflow_tracking_uri
+                    loaded[agent] = MLflowRegistryPolicy.from_registry(
+                        name, settings.mlflow_model_alias, settings.mlflow_tracking_uri
                     )
                 else:
                     path = Path(settings.model_dir) / f"dqn_{agent}_{settings.scenario}.zip"
@@ -94,14 +123,16 @@ class PolicyService:
             return
 
         self._policies = loaded
-
         if settings.mlflow_model_prefix:
-            self._version = f"{settings.mlflow_model_prefix}@{settings.mlflow_model_stage}"
+            # Report resolved versions, not just the alias, so logs and responses
+            # identify the exact artifacts serving traffic. "Production" is a
+            # pointer that moves; a version number does not.
+            resolved = sorted({getattr(pol, "version", "?") for pol in loaded.values()})
+            self._version = ",".join(resolved)
         else:
             parts = Path(settings.model_dir).parts
             # models/grid2x2/dqn/medium -> grid2x2-dqn-medium
             self._version = "-".join(parts[-3:]) if len(parts) >= 3 else settings.scenario
-
         self._load_error = None
         logger.info("all %d agents ready (version=%s)", len(loaded), self._version)
 

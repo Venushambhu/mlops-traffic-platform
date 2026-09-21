@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     # Set these to resolve models from the MLflow registry instead (phase 2).
     mlflow_tracking_uri: str | None = None
     mlflow_model_prefix: str | None = None  # e.g. "tsc-dqn-2x2-medium"
-    mlflow_model_stage: str = "Production"
+    # Alias, not stage: MLflow deprecated Staging/Production stages in 2.9.
+    mlflow_model_alias: str = "Production"
 
     # Simulates slow weight loading, used to demonstrate why liveness and
     # readiness probes must be configured separately.
