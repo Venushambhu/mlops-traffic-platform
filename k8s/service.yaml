@@ -1,0 +1,14 @@
+# One stable address in front of the pods. Pods are replaced constantly and get
+# new IPs each time; the Service routes only to pods whose readiness probe passes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tsc-policy
+  namespace: tsc
+spec:
+  selector:
+    app: tsc-policy
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

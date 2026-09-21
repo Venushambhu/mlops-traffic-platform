@@ -1,0 +1,15 @@
+# Non-secret settings, injected into pods as environment variables.
+# The image is identical in every environment; only this ConfigMap changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tsc-policy-config
+  namespace: tsc
+data:
+  TSC_MODEL_DIR: "models/grid2x2/dqn/medium"
+  TSC_SCENARIO: "medium"
+  TSC_EXPECTED_AGENTS: "B1,B2,C1,C2"
+  TSC_MIN_GREEN_SECONDS: "10"
+  TSC_LOG_LEVEL: "INFO"
+  # Raise this to simulate slow weight loading when testing probe behaviour.
+  TSC_MODEL_LOAD_DELAY_SECONDS: "0"

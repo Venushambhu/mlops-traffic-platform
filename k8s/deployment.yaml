@@ -1,0 +1,110 @@
+# The Deployment is the desired state: "two copies of this image, configured
+# like this". Kubernetes creates, replaces and reschedules pods to keep it true.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tsc-policy
+  namespace: tsc
+  labels:
+    app: tsc-policy
+spec:
+  replicas: 2
+
+  # Rolling update: add one new pod before removing an old one, and never drop
+  # below the full replica count. With two replicas, traffic always has at
+  # least two ready pods during a release.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  selector:
+    matchLabels:
+      app: tsc-policy
+
+  template:
+    metadata:
+      labels:
+        app: tsc-policy
+    spec:
+      # Pod-level hardening. The image already runs as uid 10001; this makes
+      # Kubernetes refuse to start the pod if it ever tried to run as root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+
+      containers:
+        - name: policy
+          # A new tag for every code change. Reusing a tag means the cluster
+          # cannot tell old and new images apart.
+          image: tsc-policy:0.2.0
+          # kind has no registry to pull from; the image is loaded into the node
+          # with `kind load docker-image`. IfNotPresent uses that local copy.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: tsc-policy-config
+
+          # requests: what the pod is guaranteed, and what the scheduler uses to
+          #           decide which node it fits on.
+          # limits:   the ceiling. Exceed the memory limit and the container is
+          #           killed immediately (OOMKilled). Exceed the CPU limit and it
+          #           is only slowed down (throttled), never killed.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
+          # Startup probe: holds off liveness and readiness until the process is
+          # up. Allows up to 12 x 5s = 60s to start before Kubernetes gives up.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+
+          # Readiness: 503 while models load, so the pod receives no traffic
+          # until it can actually serve. Failing this never restarts the pod.
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Liveness: is the process wedged? Points at /health, NOT /ready —
+          # a pod still loading models is not broken and must not be restarted.
+          # timeoutSeconds is 3 rather than the default 1: heavy imports on the
+          # loader thread can briefly delay responses while holding the GIL.
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: models
+              mountPath: /srv/models
+              readOnly: true
+
+      volumes:
+        # Local-development only: the kind node's /models, lent from the Mac.
+        # In a real cluster the service resolves models from the MLflow registry.
+        - name: models
+          hostPath:
+            path: /models
+            type: Directory

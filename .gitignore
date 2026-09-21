@@ -10,4 +10,4 @@ models/*.zip
 !models/.gitkeep
 *.log
 .DS_Store
-EOF
+EOFk8s/kind-cluster.yaml

@@ -14,6 +14,7 @@ restart loop — the pod never lives long enough to finish loading.
 """
 
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
 
@@ -81,11 +82,27 @@ FEATURE_NAMES = (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Start loading models in the background, then open the port immediately.
+
+    Uvicorn does not bind its socket until this function yields. Loading models
+    inline here therefore means NEITHER /health NOR /ready answers during the
+    load — the process looks dead, the liveness probe fails, and Kubernetes
+    restarts it mid-load, forever (CrashLoopBackOff).
+
+    Loading in a background thread lets the port open at once: /health answers
+    200 straight away, /ready answers 503 until the models are in memory. That
+    is the separation the probes depend on.
+    """
     logger.info("starting %s", settings.app_name)
-    policy_service.load()
-    MODEL_READY.set(1 if policy_service.is_ready else 0)
+    loader = threading.Thread(target=_load_models, name="model-loader", daemon=True)
+    loader.start()
     yield
     logger.info("shutting down")
+
+
+def _load_models() -> None:
+    policy_service.load()
+    MODEL_READY.set(1 if policy_service.is_ready else 0)
 
 
 app = FastAPI(

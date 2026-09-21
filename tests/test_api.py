@@ -58,11 +58,13 @@ FRESH_GREEN_STATE = {**SWITCHABLE_STATE, "green_elapsed": 4.0}
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # The app loads models in a background thread at startup. Left running, that
+    # thread could finish mid-test and replace the stubs with real weights —
+    # a timing-dependent, flaky failure. Disable it for contract tests.
+    monkeypatch.setattr("app.main._load_models", lambda: None)
     policy_service.set_policies(stubs(1), version="stub:v1")
     with TestClient(app) as c:
-        # TestClient runs lifespan, which attempts a real load; re-inject after.
-        policy_service.set_policies(stubs(1), version="stub:v1")
         yield c
 
 

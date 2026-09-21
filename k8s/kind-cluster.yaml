@@ -1,0 +1,16 @@
+# Local Kubernetes cluster via kind ("Kubernetes IN Docker").
+#
+# extraMounts lends the kind node a folder from your Mac, so pods can mount the
+# model checkpoints. This is a local-development convenience only: in a real
+# cluster the models come from the MLflow registry backed by S3 (phase 6).
+#
+# /Users/venushambhuhullukattenataraju/mlops-traffic-platform/models is replaced with an absolute path when the cluster is created.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: tsc
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: /Users/venushambhuhullukattenataraju/mlops-traffic-platform/models
+        containerPath: /models
+        readOnly: true
