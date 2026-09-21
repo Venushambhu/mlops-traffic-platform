@@ -1,0 +1,30 @@
+# Everything here is excluded from the build context sent to Docker.
+# .venv alone is ~1 GB with torch; sending it would make every build slow.
+
+.venv/
+venv/
+.git/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Model state is supplied at runtime, never baked into the image.
+models/
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Only needed by the registration script, not by the service.
+data/
+scripts/
+tests/
+
+# Secrets must never enter an image layer — layers are readable by anyone
+# with the image, even if a later step deletes the file.
+.env
+*.pem
+*.key
+
+*.md
+.DS_Store
